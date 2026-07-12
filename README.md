@@ -5,42 +5,67 @@ vehicle registry, driver management, trip dispatch, maintenance, fuel/expense
 tracking, and analytics — with business rules and RBAC enforced by the service
 layer, not by human discipline.
 
-> This repository currently contains the **web frontend**. The NestJS + Prisma +
-> PostgreSQL backend described in the architecture is planned; the UI runs on
-> representative mock data and is ready to be wired to the REST API.
+> **Status: full stack built and deployed.** A NestJS + Prisma + PostgreSQL API
+> backs a React (Vite) frontend. Everything runs on a single EC2 instance behind
+> Nginx (`/` → SPA, `/api` → NestJS). See
+> [`docs/TECHNICAL_ARCHITECTURE.md`](docs/TECHNICAL_ARCHITECTURE.md) for the full design.
+
+**Live:** http://3.110.169.152
 
 ---
 
-## Tech stack (frontend)
+## Tech stack
 
-- **React 18** + **TypeScript** + **Vite**
-- **Tailwind CSS** for styling (dark, glassy theme)
-- **react-router-dom** for routing
-- **motion** (Framer Motion) for animation
-- **lucide-react** for icons
+**Frontend** (`/`)
+- React 19 + TypeScript + Vite
+- Tailwind CSS (dark, glassy theme)
+- react-router-dom, axios, motion (Framer Motion), lucide-react
 
-Planned backend: **NestJS** (layered modules), **Prisma ORM**, **PostgreSQL**,
-**JWT + Passport + bcrypt** auth. See the architecture design for details.
+**Backend** (`server/`)
+- NestJS 10 (layered modules: controller → service → Prisma)
+- Prisma ORM 5 + PostgreSQL 15
+- JWT (Passport) + bcrypt auth, class-validator DTOs, `@nestjs/throttler`
+
+**Infra**
+- PM2 (API process), Nginx (reverse proxy), PostgreSQL bound to localhost
+- Amazon Linux 2023 on EC2; deploy scripted over AWS SSM (`deploy/`, `ssm.ps1`)
 
 ---
 
 ## Getting started
 
+### Frontend
 ```bash
-# install dependencies
 npm install
-
-# start the dev server
-npm run dev
-
-# type-check + production build
-npm run build
-
-# preview the production build
+npm run dev        # dev server (proxies /api → deployed backend)
+npm run build      # type-check + production build
 npm run preview
 ```
 
-The app runs at the URL Vite prints (default `http://localhost:5173`).
+### Backend
+```bash
+cd server
+npm install
+cp .env.example .env          # set DATABASE_URL, JWT_SECRET
+npm run prisma:generate
+npm run prisma:deploy         # apply migrations
+npm run seed                  # 4 demo users + sample fleet
+npm run start:dev             # API on http://localhost:3000/api
+npm test                      # unit tests (trip dispatch guards)
+```
+
+---
+
+## Demo logins (RBAC)
+
+Selecting a role on the login screen preselects its credentials.
+
+| Role | Email | Password |
+|------|-------|----------|
+| Fleet Manager | `manager@transitops.io` | `manager123` |
+| Driver | `driver@transitops.io` | `driver123` |
+| Safety Officer | `safety@transitops.io` | `safety123` |
+| Financial Analyst | `finance@transitops.io` | `finance123` |
 
 ---
 
@@ -49,52 +74,60 @@ The app runs at the URL Vite prints (default `http://localhost:5173`).
 | Route | Description |
 |-------|-------------|
 | `/` | Marketing landing page |
-| `/login` | Authentication (RBAC) — placeholder, wired to real auth later |
-| `/dashboard` | Operations dashboard — KPIs, alerts, status breakdowns |
-| `/fleet` | Vehicle registry — lifecycle status, cost, ROI |
-| `/drivers` | Drivers & safety profiles — license validity, safety scores |
-| `/trips` | Trip dispatcher — lifecycle, dispatch guards, live board |
-| `/maintenance` | Maintenance — open/closed records, IN_SHOP side effects |
-| `/fuel-expenses` | Fuel & expense management — cost rollups |
-| `/analytics` | Reports & analytics — KPI formulas, charts, export |
+| `/login` | Authentication (RBAC) — real JWT login |
+| `/dashboard` | Operations dashboard — live KPIs, alerts, status breakdowns |
+| `/fleet` | Vehicle registry — CRUD, lifecycle status, filters |
+| `/drivers` | Drivers & safety profiles — license validity, safety scores, CRUD |
+| `/trips` | Trip dispatcher — create → dispatch → complete/cancel, guards, live board |
+| `/maintenance` | Maintenance — open/close records, IN_SHOP side effects |
+| `/fuel-expenses` | Fuel & expense management — logs, cost rollups |
+| `/analytics` | Reports & analytics — KPI formulas, charts, CSV export |
 | `/settings` | Settings & RBAC — role matrix, security posture |
 
-The authenticated routes render inside a shared app shell (sidebar + topbar);
-the landing page and `/login` render standalone.
+Authenticated routes render inside a shared app shell (sidebar + topbar) behind an
+auth guard; the landing page and `/login` render standalone.
 
 ---
 
 ## Project structure
 
 ```text
-src/
-├── App.tsx                 # landing page composition
-├── main.tsx                # router + route definitions
-├── index.css               # theme tokens, fonts, liquid-glass utility
-├── components/             # landing sections (Hero, Pricing, etc.)
+src/                         # React frontend
+├── App.tsx                  # landing page composition
+├── main.tsx                 # router + auth provider + protected routes
+├── lib/                     # axios API client + auth context
 └── app/
-    ├── AppLayout.tsx       # authenticated shell (sidebar + topbar)
-    ├── ui.tsx              # shared UI primitives (Card, StatusBadge, ...)
-    └── pages/              # the 8 module pages + Login
+    ├── AppLayout.tsx        # authenticated shell
+    ├── ui.tsx               # shared primitives (Card, StatusBadge, Modal, ...)
+    └── pages/               # module pages + Login
+
+server/                      # NestJS backend
+├── prisma/                  # schema.prisma, migrations/, seed.ts
+└── src/
+    ├── common/              # guards, filters, decorators, DTOs
+    └── modules/             # auth, vehicles, drivers, trips, maintenance,
+                             # fuel-expenses, analytics, health
+
+deploy/                      # EC2 provisioning + SSM deploy scripts
+docs/TECHNICAL_ARCHITECTURE.md
 ```
 
 ---
 
-## Domain model (from the architecture)
-
-The UI is built around the real entity graph and its enforced rules:
+## Domain model & enforced rules
 
 - **Enum state machines** — `Vehicle`, `Driver`, and `Trip` statuses drive filters,
   dispatch eligibility, and visualized transitions.
-- **Dispatch guards** — cargo ≤ vehicle max load, valid (non-expired) license,
-  driver/vehicle not already `ON_TRIP`; all checked before dispatch.
+- **Dispatch guards** (service layer, in transactions) — cargo ≤ vehicle max load,
+  valid (non-expired) license, driver not SUSPENDED, vehicle/driver not already
+  `ON_TRIP`, vehicle not `RETIRED`/`IN_SHOP`; violations → `422`.
 - **Cross-entity side effects** — opening maintenance flips a vehicle to `IN_SHOP`
-  and removes it from the dispatch pool; completing a trip restores both vehicle
-  and driver to `AVAILABLE`.
+  and removes it from the dispatch pool; completing/cancelling a trip restores both
+  vehicle and driver to `AVAILABLE` — all atomic.
 - **KPI formulas** — Fleet Utilization, Fuel Efficiency, Operational Cost, and
-  Vehicle ROI are surfaced with their definitions on the analytics page.
-- **RBAC** — Fleet Manager, Dispatcher, Safety Officer, and Financial Analyst
-  roles map to a per-module access matrix.
+  Vehicle ROI, computed from live data.
+- **RBAC** — Fleet Manager, Driver, Safety Officer, and Financial Analyst roles map
+  to a per-module access matrix; reads open to any authenticated user, writes role-scoped.
 
 ---
 
@@ -113,8 +146,9 @@ for release. Conventional commits (e.g. `feat(trips): enforce cargo capacity`).
 
 ## Status
 
-- [x] Frontend landing page
-- [x] App shell + 8 module pages (mock data)
-- [ ] NestJS API + Prisma schema + PostgreSQL
-- [ ] JWT auth + RBAC guards
-- [ ] Wire frontend to REST API
+- [x] Frontend landing page + app shell + module pages
+- [x] NestJS API + Prisma schema + PostgreSQL (migrations)
+- [x] JWT auth + RBAC guards
+- [x] Vehicles & Drivers CRUD, Trip dispatch engine, Maintenance, Fuel/Expenses, Analytics
+- [x] Frontend wired to REST API (live data, loading/empty/error states)
+- [x] Deployed to EC2 (Nginx + PM2 + PostgreSQL)
