@@ -1,7 +1,17 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, X, Zap } from 'lucide-react'
 import { Card, PageHeader, StatusBadge, SectionCard, Pill } from '../ui'
 import type { StatusTone } from '../ui'
+import {
+  VehiclesApi,
+  DriversApi,
+  TripsApi,
+  apiError,
+  type Vehicle,
+  type Driver,
+  type Trip,
+  type TripStatus,
+} from '../../lib/api'
 
 const LIFECYCLE: { label: string; tone: StatusTone; effect: string }[] = [
   { label: 'Draft', tone: 'draft', effect: 'created, not yet assigned' },
@@ -10,38 +20,131 @@ const LIFECYCLE: { label: string; tone: StatusTone; effect: string }[] = [
   { label: 'Cancelled', tone: 'cancelled', effect: 'restores both → AVAILABLE' },
 ]
 
-const LIVE_BOARD: {
-  trip: string
-  route: string
-  tone: StatusTone
-  status: string
-  assignment: string
-  meta: string
-}[] = [
-  { trip: 'TR001', route: 'Gandhinagar Depot → Ahmedabad Hub', tone: 'dispatched', status: 'Dispatched', assignment: 'VAN-05 · Alex', meta: 'ETA 45 min' },
-  { trip: 'TR002', route: 'Vatva → Sanand Warehouse', tone: 'completed', status: 'Completed', assignment: 'TRK-12 · John', meta: '452 km · 168 L' },
-  { trip: 'TR004', route: 'Vatva Industrial Area → Sanand', tone: 'draft', status: 'Draft', assignment: 'Unassigned', meta: 'Awaiting driver' },
-  { trip: 'TR006', route: 'Maroa → Kalol Depot', tone: 'cancelled', status: 'Cancelled', assignment: 'Unassigned', meta: 'Vehicle sent to shop' },
-]
+const TRIP_TONE: Record<TripStatus, StatusTone> = {
+  DRAFT: 'draft',
+  DISPATCHED: 'dispatched',
+  COMPLETED: 'completed',
+  CANCELLED: 'cancelled',
+}
 
-const VEHICLE_CAPACITY = 500
+function driverEligible(d: Driver): boolean {
+  return (
+    d.status === 'AVAILABLE' &&
+    new Date(d.licenseExpiry).getTime() > Date.now()
+  )
+}
 
 export function Trips() {
-  const [cargo, setCargo] = useState(700)
-  const [licenseOk] = useState(true)
-  const [vehicleFree] = useState(true)
-  const [driverFree] = useState(true)
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+  const [drivers, setDrivers] = useState<Driver[]>([])
+  const [trips, setTrips] = useState<Trip[]>([])
+  const [boardLoading, setBoardLoading] = useState(true)
+  const [boardError, setBoardError] = useState<string | null>(null)
 
-  const overCapacity = cargo > VEHICLE_CAPACITY
-  const over = useMemo(() => cargo - VEHICLE_CAPACITY, [cargo])
+  const [source, setSource] = useState('Gandhinagar Depot')
+  const [destination, setDestination] = useState('Ahmedabad Hub')
+  const [vehicleId, setVehicleId] = useState('')
+  const [driverId, setDriverId] = useState('')
+  const [cargo, setCargo] = useState(400)
+  const [distance, setDistance] = useState(34)
+
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const loadRefs = () => {
+    VehiclesApi.list({ status: 'AVAILABLE', limit: 100 })
+      .then((r) => setVehicles(r.data))
+      .catch(() => setVehicles([]))
+    DriversApi.list({ limit: 100 })
+      .then((r) => setDrivers(r.data))
+      .catch(() => setDrivers([]))
+  }
+  const loadBoard = () => {
+    setBoardLoading(true)
+    setBoardError(null)
+    TripsApi.list({ limit: 8 })
+      .then((r) => setTrips(r.data))
+      .catch((e) => setBoardError(apiError(e)))
+      .finally(() => setBoardLoading(false))
+  }
+
+  useEffect(() => {
+    loadRefs()
+    loadBoard()
+  }, [])
+
+  const selectedVehicle = vehicles.find((v) => v.id === vehicleId)
+  const selectedDriver = drivers.find((d) => d.id === driverId)
+  const capacity = selectedVehicle?.maxLoadKg ?? 0
+
+  const overCapacity = capacity > 0 && cargo > capacity
+  const over = useMemo(() => cargo - capacity, [cargo, capacity])
 
   const guards = [
-    { ok: !overCapacity, label: `Cargo ${cargo} kg ≤ vehicle max load ${VEHICLE_CAPACITY} kg` },
-    { ok: licenseOk, label: 'Driver license valid (not expired)' },
-    { ok: driverFree, label: 'Driver not suspended and not already ON_TRIP' },
-    { ok: vehicleFree, label: 'Vehicle AVAILABLE (not IN_SHOP / RETIRED / ON_TRIP)' },
+    {
+      ok: !!selectedVehicle && !overCapacity,
+      label: selectedVehicle
+        ? `Cargo ${cargo} kg ≤ vehicle max load ${capacity.toLocaleString()} kg`
+        : 'Select an available vehicle',
+    },
+    {
+      ok: !!selectedDriver && new Date(selectedDriver.licenseExpiry).getTime() > Date.now(),
+      label: 'Driver license valid (not expired)',
+    },
+    {
+      ok: !!selectedDriver && selectedDriver.status === 'AVAILABLE',
+      label: 'Driver not suspended and not already ON_TRIP',
+    },
+    {
+      ok: !!selectedVehicle && selectedVehicle.status === 'AVAILABLE',
+      label: 'Vehicle AVAILABLE (not IN_SHOP / RETIRED / ON_TRIP)',
+    },
   ]
-  const canDispatch = guards.every((g) => g.ok)
+  const canDispatch = guards.every((g) => g.ok) && !submitting
+
+  const buildBody = () => ({
+    source,
+    destination,
+    vehicleId,
+    driverId,
+    cargoWeight: Number(cargo),
+    plannedDistance: Number(distance),
+  })
+
+  const handleDispatch = async () => {
+    setFormError(null)
+    setNotice(null)
+    setSubmitting(true)
+    try {
+      const trip = await TripsApi.create(buildBody())
+      await TripsApi.dispatch(trip.id)
+      setNotice('Trip dispatched — vehicle and driver set to ON_TRIP.')
+      loadRefs()
+      loadBoard()
+    } catch (err) {
+      setFormError(apiError(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleDraft = async () => {
+    setFormError(null)
+    setNotice(null)
+    setSubmitting(true)
+    try {
+      await TripsApi.create(buildBody())
+      setNotice('Draft trip saved.')
+      loadBoard()
+    } catch (err) {
+      setFormError(apiError(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const eligibleDrivers = drivers.filter(driverEligible)
 
   return (
     <div className="space-y-6">
@@ -51,7 +154,6 @@ export function Trips() {
         action={<Pill tone="brand"><Zap className="w-3.5 h-3.5" /> Rule-guarded state machine</Pill>}
       />
 
-      {/* Annotated lifecycle */}
       <SectionCard title="Trip lifecycle" description="Trip.status · DRAFT → DISPATCHED → COMPLETED / CANCELLED">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {LIFECYCLE.map((s, i) => (
@@ -76,35 +178,38 @@ export function Trips() {
           <div className="mt-4 space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Source">
-                <input defaultValue="Gandhinagar Depot" className={inputCls} />
+                <input value={source} onChange={(e) => setSource(e.target.value)} className={inputCls} />
               </FormField>
               <FormField label="Destination">
-                <input defaultValue="Ahmedabad Hub" className={inputCls} />
+                <input value={destination} onChange={(e) => setDestination(e.target.value)} className={inputCls} />
               </FormField>
             </div>
             <FormField label="Vehicle (AVAILABLE only)">
-              <select className={inputCls}>
-                <option className="bg-[#0c0c0c]">VAN-05 · max 500 kg</option>
-                <option className="bg-[#0c0c0c]">TRUCK-11 · max 5,000 kg</option>
+              <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} className={inputCls}>
+                <option value="" className="bg-[#0c0c0c]">Select vehicle…</option>
+                {vehicles.map((v) => (
+                  <option key={v.id} value={v.id} className="bg-[#0c0c0c]">
+                    {v.name} · {v.regNo} · max {v.maxLoadKg.toLocaleString()} kg
+                  </option>
+                ))}
               </select>
             </FormField>
             <FormField label="Driver (eligible only)">
-              <select className={inputCls}>
-                <option className="bg-[#0c0c0c]">Alex Mathew · LMV · safety 96</option>
-                <option className="bg-[#0c0c0c]">Priya Nair · LMV · safety 99</option>
+              <select value={driverId} onChange={(e) => setDriverId(e.target.value)} className={inputCls}>
+                <option value="" className="bg-[#0c0c0c]">Select driver…</option>
+                {eligibleDrivers.map((d) => (
+                  <option key={d.id} value={d.id} className="bg-[#0c0c0c]">
+                    {d.name} · {d.licenseCategory} · safety {d.safetyScore}
+                  </option>
+                ))}
               </select>
             </FormField>
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Cargo Weight (kg)">
-                <input
-                  type="number"
-                  value={cargo}
-                  onChange={(e) => setCargo(Number(e.target.value))}
-                  className={inputCls}
-                />
+                <input type="number" value={cargo} onChange={(e) => setCargo(Number(e.target.value))} className={inputCls} />
               </FormField>
               <FormField label="Planned Distance (km)">
-                <input defaultValue={34} type="number" className={inputCls} />
+                <input type="number" value={distance} onChange={(e) => setDistance(Number(e.target.value))} className={inputCls} />
               </FormField>
             </div>
 
@@ -114,14 +219,26 @@ export function Trips() {
                   <AlertTriangle className="w-4 h-4" /> 422 · Cargo exceeds capacity
                 </div>
                 <div className="mt-1.5 space-y-0.5 text-[#ff8a84]/90">
-                  <div>Vehicle max load: {VEHICLE_CAPACITY} kg · cargo: {cargo} kg</div>
-                  <div>Over by {over} kg — dispatch blocked by TripService guard.</div>
+                  <div>Vehicle max load: {capacity.toLocaleString()} kg · cargo: {cargo} kg</div>
+                  <div>Over by {over.toLocaleString()} kg — dispatch blocked by TripService guard.</div>
                 </div>
+              </div>
+            ) : null}
+
+            {formError ? (
+              <div className="rounded-lg border border-[#ff5f57]/40 bg-[#ff5f57]/10 px-3 py-2.5 text-xs text-[#ff8a84]">
+                {formError}
+              </div>
+            ) : null}
+            {notice ? (
+              <div className="rounded-lg border border-[#28c840]/40 bg-[#28c840]/10 px-3 py-2.5 text-xs text-[#4ade80]">
+                {notice}
               </div>
             ) : null}
 
             <div className="flex items-center gap-3 pt-1">
               <button
+                onClick={handleDispatch}
                 disabled={!canDispatch}
                 className={`rounded-lg px-4 py-2 text-sm font-semibold transition-all ${
                   !canDispatch
@@ -129,16 +246,20 @@ export function Trips() {
                     : 'bg-[#e0972a] text-black hover:bg-[#f0a838]'
                 }`}
               >
-                {canDispatch ? 'Dispatch trip' : 'Dispatch blocked'}
+                {submitting ? 'Working…' : canDispatch ? 'Dispatch trip' : 'Dispatch blocked'}
               </button>
-              <button className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 hover:bg-white/5">
+              <button
+                onClick={handleDraft}
+                disabled={submitting || !vehicleId || !driverId}
+                className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 hover:bg-white/5 disabled:opacity-40"
+              >
                 Save as draft
               </button>
             </div>
           </div>
         </Card>
 
-        {/* Dispatch guard checklist + live board */}
+        {/* Guards + live board */}
         <div className="space-y-6">
           <SectionCard title="Dispatch guard checklist" description="All must pass inside one transaction">
             <ul className="space-y-2.5">
@@ -155,21 +276,33 @@ export function Trips() {
             </ul>
           </SectionCard>
 
-          <SectionCard title="Live board" description="All trips across every status">
-            <div className="space-y-3">
-              {LIVE_BOARD.map((t) => (
-                <div key={t.trip} className="rounded-lg border border-white/10 bg-white/[0.02] p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="text-sm font-medium">{t.route}</div>
-                    <StatusBadge tone={t.tone} label={t.status} />
+          <SectionCard title="Live board" description="Latest trips across every status">
+            {boardLoading ? (
+              <div className="py-8 text-center text-sm text-white/40 animate-pulse">Loading trips…</div>
+            ) : boardError ? (
+              <div className="py-8 text-center text-sm text-[#ff8a84]">{boardError}</div>
+            ) : trips.length === 0 ? (
+              <div className="py-8 text-center text-sm text-white/40">No trips yet — dispatch one to see it here.</div>
+            ) : (
+              <div className="space-y-3">
+                {trips.map((t) => (
+                  <div key={t.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-sm font-medium">
+                        {t.source} → {t.destination}
+                      </div>
+                      <StatusBadge tone={TRIP_TONE[t.status]} label={t.status} />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs text-white/40">
+                      <span>
+                        {t.vehicle?.regNo ?? '—'} · {t.driver?.name ?? 'Unassigned'}
+                      </span>
+                      <span>{t.cargoWeight.toLocaleString()} kg · {t.plannedDistance} km</span>
+                    </div>
                   </div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-white/40">
-                    <span>{t.trip} · {t.assignment}</span>
-                    <span>{t.meta}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </SectionCard>
         </div>
       </div>

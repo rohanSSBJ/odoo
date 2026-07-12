@@ -14,6 +14,7 @@ import {
   LogOut,
 } from 'lucide-react'
 import { LogoMark } from '../components/primitives'
+import { useAuth } from '../lib/auth'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -29,6 +30,27 @@ const NAV = [
 export function AppLayout() {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
+  const { user, logout } = useAuth()
+
+  const roleLabel = user
+    ? user.role
+        .split('_')
+        .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+        .join(' ')
+    : ''
+  const initials = user
+    ? user.name
+        .split(' ')
+        .map((p) => p.charAt(0))
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : '??'
+
+  const handleSignOut = () => {
+    logout()
+    navigate('/login')
+  }
 
   const SidebarInner = (
     <div className="flex h-full flex-col">
@@ -61,7 +83,7 @@ export function AppLayout() {
       </nav>
 
       <button
-        onClick={() => navigate('/login')}
+        onClick={handleSignOut}
         className="m-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-white/55 transition-colors hover:bg-white/5 hover:text-white/80"
       >
         <LogOut className="w-4 h-4" />
@@ -117,11 +139,11 @@ export function AppLayout() {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
-              <span className="hidden sm:block text-sm text-white/60">Raven K.</span>
+              <span className="hidden sm:block text-sm text-white/60">{user?.name ?? ''}</span>
               <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1 pl-3 pr-1">
-                <span className="text-xs text-white/70">Dispatcher</span>
+                <span className="text-xs text-white/70">{roleLabel}</span>
                 <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-[#00d2ff] to-[#0B2551] text-[10px] font-semibold">
-                  RK
+                  {initials}
                 </div>
               </div>
             </div>

@@ -2,12 +2,47 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
 import { LogoMark } from '../../components/primitives'
+import { useAuth } from '../../lib/auth'
+import { apiError, type Role } from '../../lib/api'
 
-const ROLES = ['Fleet Manager', 'Dispatcher', 'Safety Officer', 'Financial Analyst']
+// Canonical roles + their seeded demo accounts (all password: Passw0rd!)
+const DEMO: { role: Role; label: string; email: string }[] = [
+  { role: 'FLEET_MANAGER', label: 'Fleet Manager', email: 'manager@transitops.io' },
+  { role: 'DRIVER', label: 'Driver', email: 'driver@transitops.io' },
+  { role: 'SAFETY_OFFICER', label: 'Safety Officer', email: 'safety@transitops.io' },
+  { role: 'FINANCIAL_ANALYST', label: 'Financial Analyst', email: 'finance@transitops.io' },
+]
+const DEMO_PASSWORD = 'Passw0rd!'
 
 export function Login() {
   const navigate = useNavigate()
-  const [role, setRole] = useState('Dispatcher')
+  const { login } = useAuth()
+
+  const [selected, setSelected] = useState<Role>('FLEET_MANAGER')
+  const [email, setEmail] = useState(DEMO[0].email)
+  const [password, setPassword] = useState(DEMO_PASSWORD)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const onRoleChange = (role: Role) => {
+    setSelected(role)
+    const found = DEMO.find((d) => d.role === role)
+    if (found) setEmail(found.email)
+  }
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      await login(email.trim(), password)
+      navigate('/dashboard')
+    } catch (err) {
+      setError(apiError(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <div className="relative min-h-screen bg-[#0c0c0c] text-white lg:grid lg:grid-cols-2">
@@ -31,10 +66,10 @@ export function Login() {
         <div className="relative z-10 mt-auto">
           <div className="text-sm font-medium text-white/70">One login, four roles</div>
           <ul className="mt-4 space-y-2.5 text-sm text-white/60">
-            {ROLES.map((r) => (
-              <li key={r} className="flex items-center gap-2.5">
+            {DEMO.map((r) => (
+              <li key={r.role} className="flex items-center gap-2.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#e0972a]" />
-                {r}
+                {r.label}
               </li>
             ))}
           </ul>
@@ -55,17 +90,26 @@ export function Login() {
           <h1 className="text-2xl font-semibold tracking-tight">Sign in to your account</h1>
           <p className="mt-2 text-sm text-white/50">Enter your credentials to continue</p>
 
-          <form
-            className="mt-8 space-y-5"
-            onSubmit={(e) => {
-              e.preventDefault()
-              navigate('/dashboard')
-            }}
-          >
+          <form className="mt-8 space-y-5" onSubmit={onSubmit}>
+            <Field label="Demo account (RBAC role)">
+              <select
+                value={selected}
+                onChange={(e) => onRoleChange(e.target.value as Role)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white focus:border-white/25 focus:outline-none"
+              >
+                {DEMO.map((r) => (
+                  <option key={r.role} value={r.role} className="bg-[#0c0c0c]">
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
             <Field label="Email">
               <input
                 type="email"
-                defaultValue="raven.k@transitops.io"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-white/25 focus:outline-none"
               />
             </Field>
@@ -73,40 +117,24 @@ export function Login() {
             <Field label="Password">
               <input
                 type="password"
-                defaultValue="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-white/25 focus:outline-none"
               />
             </Field>
 
-            <Field label="Role (RBAC)">
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white focus:border-white/25 focus:outline-none"
-              >
-                {ROLES.map((r) => (
-                  <option key={r} value={r} className="bg-[#0c0c0c]">
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <div className="flex items-center justify-between text-sm">
-              <label className="flex items-center gap-2 text-white/60">
-                <input type="checkbox" defaultChecked className="accent-[#3D81E3]" />
-                Remember me
-              </label>
-              <button type="button" className="text-[#7db3ff] hover:text-white">
-                Forgot password?
-              </button>
-            </div>
+            {error ? (
+              <div className="rounded-lg border border-[#ff5f57]/40 bg-[#ff5f57]/10 px-3 py-2.5 text-xs text-[#ff8a84]">
+                {error}
+              </div>
+            ) : null}
 
             <button
               type="submit"
-              className="w-full rounded-lg bg-[#e0972a] py-2.5 text-sm font-semibold text-black transition-colors hover:bg-[#f0a838] active:scale-[0.99]"
+              disabled={submitting}
+              className="w-full rounded-lg bg-[#e0972a] py-2.5 text-sm font-semibold text-black transition-colors hover:bg-[#f0a838] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Sign In
+              {submitting ? 'Signing in…' : 'Sign In'}
             </button>
           </form>
 
@@ -115,11 +143,14 @@ export function Login() {
               Access is scoped by role after login
             </div>
             <ul className="mt-3 space-y-1 text-xs text-white/50">
-              <li>Fleet Manager → Fleet, Maintenance</li>
-              <li>Dispatcher → Dashboard, Trips</li>
-              <li>Safety Officer → Drivers, Compliance</li>
+              <li>Fleet Manager → Vehicles, Maintenance</li>
+              <li>Driver → Trips dispatch</li>
+              <li>Safety Officer → Drivers &amp; compliance</li>
               <li>Financial Analyst → Fuel &amp; Expenses, Analytics</li>
             </ul>
+            <div className="mt-3 text-[11px] text-white/35">
+              Demo password: <span className="font-mono text-white/60">{DEMO_PASSWORD}</span>
+            </div>
           </div>
         </motion.div>
       </div>
