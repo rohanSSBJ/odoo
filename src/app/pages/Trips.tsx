@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, X, Zap } from 'lucide-react'
-import { Card, PageHeader, StatusBadge, SectionCard, Pill } from '../ui'
+import { Card, PageHeader, StatusBadge, SectionCard, Pill, Modal, FormRow, fieldInputCls } from '../ui'
 import type { StatusTone } from '../ui'
+import { useAuth } from '../../lib/auth'
 import {
   VehiclesApi,
   DriversApi,
@@ -35,6 +36,9 @@ function driverEligible(d: Driver): boolean {
 }
 
 export function Trips() {
+  const { user } = useAuth()
+  const canWrite = !!user && ['DRIVER', 'FLEET_MANAGER'].includes(user.role)
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [trips, setTrips] = useState<Trip[]>([])
@@ -51,6 +55,12 @@ export function Trips() {
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+
+  // board actions
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [boardMsg, setBoardMsg] = useState<string | null>(null)
+  const [completeTrip, setCompleteTrip] = useState<Trip | null>(null)
+  const [completeForm, setCompleteForm] = useState({ finalOdometer: 0, fuelConsumed: 0, revenue: 0 })
 
   const loadRefs = () => {
     VehiclesApi.list({ status: 'AVAILABLE', limit: 100 })
@@ -145,6 +155,46 @@ export function Trips() {
   }
 
   const eligibleDrivers = drivers.filter(driverEligible)
+
+  // ---- board actions ----
+  const doAction = async (fn: () => Promise<unknown>, id: string, msg: string) => {
+    setBusyId(id)
+    setBoardMsg(null)
+    try {
+      await fn()
+      setBoardMsg(msg)
+      loadRefs()
+      loadBoard()
+    } catch (err) {
+      setBoardMsg(apiError(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+  const dispatchExisting = (t: Trip) =>
+    doAction(() => TripsApi.dispatch(t.id), t.id, 'Trip dispatched.')
+  const cancelTrip = (t: Trip) =>
+    doAction(() => TripsApi.cancel(t.id), t.id, 'Trip cancelled — vehicle & driver restored.')
+  const openComplete = (t: Trip) => {
+    setCompleteTrip(t)
+    setCompleteForm({ finalOdometer: 0, fuelConsumed: 0, revenue: 0 })
+  }
+  const submitComplete = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!completeTrip) return
+    const t = completeTrip
+    setCompleteTrip(null)
+    await doAction(
+      () =>
+        TripsApi.complete(t.id, {
+          finalOdometer: Number(completeForm.finalOdometer),
+          fuelConsumed: Number(completeForm.fuelConsumed),
+          revenue: completeForm.revenue ? Number(completeForm.revenue) : undefined,
+        }),
+      t.id,
+      'Trip completed — vehicle & driver set to AVAILABLE.',
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -277,6 +327,9 @@ export function Trips() {
           </SectionCard>
 
           <SectionCard title="Live board" description="Latest trips across every status">
+            {boardMsg ? (
+              <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70">{boardMsg}</div>
+            ) : null}
             {boardLoading ? (
               <div className="py-8 text-center text-sm text-white/40 animate-pulse">Loading trips…</div>
             ) : boardError ? (
@@ -299,6 +352,19 @@ export function Trips() {
                       </span>
                       <span>{t.cargoWeight.toLocaleString()} kg · {t.plannedDistance} km</span>
                     </div>
+                    {canWrite && (t.status === 'DRAFT' || t.status === 'DISPATCHED') ? (
+                      <div className="mt-3 flex items-center gap-2">
+                        {t.status === 'DRAFT' ? (
+                          <button onClick={() => dispatchExisting(t)} disabled={busyId === t.id} className="rounded-md bg-[#e0972a] px-3 py-1 text-xs font-semibold text-black hover:bg-[#f0a838] disabled:opacity-50">Dispatch</button>
+                        ) : null}
+                        {t.status === 'DISPATCHED' ? (
+                          <button onClick={() => openComplete(t)} disabled={busyId === t.id} className="rounded-md bg-[#28c840] px-3 py-1 text-xs font-semibold text-black hover:bg-[#3ad653] disabled:opacity-50">Complete</button>
+                        ) : null}
+                        <button onClick={() => cancelTrip(t)} disabled={busyId === t.id} className="rounded-md border border-white/15 px-3 py-1 text-xs text-white/70 hover:bg-white/5 disabled:opacity-50">
+                          {busyId === t.id ? '…' : 'Cancel'}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -306,6 +372,29 @@ export function Trips() {
           </SectionCard>
         </div>
       </div>
+
+      <Modal open={!!completeTrip} onClose={() => setCompleteTrip(null)} title="Complete trip">
+        <form className="space-y-3" onSubmit={submitComplete}>
+          <p className="text-xs text-white/50">
+            {completeTrip?.source} → {completeTrip?.destination}. Records final odometer + fuel; vehicle &amp; driver return to AVAILABLE.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Final odometer (km)">
+              <input required type="number" min={0} value={completeForm.finalOdometer} onChange={(e) => setCompleteForm({ ...completeForm, finalOdometer: Number(e.target.value) })} className={fieldInputCls} />
+            </FormRow>
+            <FormRow label="Fuel consumed (L)">
+              <input required type="number" min={0} value={completeForm.fuelConsumed} onChange={(e) => setCompleteForm({ ...completeForm, fuelConsumed: Number(e.target.value) })} className={fieldInputCls} />
+            </FormRow>
+          </div>
+          <FormRow label="Revenue (₹, optional)">
+            <input type="number" min={0} value={completeForm.revenue} onChange={(e) => setCompleteForm({ ...completeForm, revenue: Number(e.target.value) })} className={fieldInputCls} />
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setCompleteTrip(null)} className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/70 hover:bg-white/5">Cancel</button>
+            <button type="submit" className="rounded-lg bg-[#28c840] px-4 py-2 text-sm font-semibold text-black hover:bg-[#3ad653]">Complete trip</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   )
 }
