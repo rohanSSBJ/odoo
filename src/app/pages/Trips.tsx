@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, X, Zap } from 'lucide-react'
-import { Card, PageHeader, StatusBadge, SectionCard, Pill, Modal, FormRow, fieldInputCls } from '../ui'
+import { Card, PageHeader, StatusBadge, SectionCard, Pill, Modal, FormRow, fieldInputCls, KeyValue } from '../ui'
 import type { StatusTone } from '../ui'
 import { useAuth } from '../../lib/auth'
 import {
@@ -61,6 +61,7 @@ export function Trips() {
   const [boardMsg, setBoardMsg] = useState<string | null>(null)
   const [completeTrip, setCompleteTrip] = useState<Trip | null>(null)
   const [completeForm, setCompleteForm] = useState({ finalOdometer: 0, fuelConsumed: 0, revenue: 0 })
+  const [summaryTrip, setSummaryTrip] = useState<Trip | null>(null)
 
   const loadRefs = () => {
     VehiclesApi.list({ status: 'AVAILABLE', limit: 100 })
@@ -339,7 +340,19 @@ export function Trips() {
             ) : (
               <div className="space-y-3">
                 {trips.map((t) => (
-                  <div key={t.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3.5">
+                  <div
+                    key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSummaryTrip(t)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSummaryTrip(t)
+                      }
+                    }}
+                    className="cursor-pointer rounded-lg border border-white/10 bg-white/[0.02] p-3.5 transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus:ring-1 focus:ring-white/25"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="text-sm font-medium">
                         {t.source} → {t.destination}
@@ -355,16 +368,17 @@ export function Trips() {
                     {canWrite && (t.status === 'DRAFT' || t.status === 'DISPATCHED') ? (
                       <div className="mt-3 flex items-center gap-2">
                         {t.status === 'DRAFT' ? (
-                          <button onClick={() => dispatchExisting(t)} disabled={busyId === t.id} className="rounded-md bg-[#e0972a] px-3 py-1 text-xs font-semibold text-black hover:bg-[#f0a838] disabled:opacity-50">Dispatch</button>
+                          <button onClick={(e) => { e.stopPropagation(); dispatchExisting(t) }} disabled={busyId === t.id} className="rounded-md bg-[#e0972a] px-3 py-1 text-xs font-semibold text-black hover:bg-[#f0a838] disabled:opacity-50">Dispatch</button>
                         ) : null}
                         {t.status === 'DISPATCHED' ? (
-                          <button onClick={() => openComplete(t)} disabled={busyId === t.id} className="rounded-md bg-[#28c840] px-3 py-1 text-xs font-semibold text-black hover:bg-[#3ad653] disabled:opacity-50">Complete</button>
+                          <button onClick={(e) => { e.stopPropagation(); openComplete(t) }} disabled={busyId === t.id} className="rounded-md bg-[#28c840] px-3 py-1 text-xs font-semibold text-black hover:bg-[#3ad653] disabled:opacity-50">Complete</button>
                         ) : null}
-                        <button onClick={() => cancelTrip(t)} disabled={busyId === t.id} className="rounded-md border border-white/15 px-3 py-1 text-xs text-white/70 hover:bg-white/5 disabled:opacity-50">
+                        <button onClick={(e) => { e.stopPropagation(); cancelTrip(t) }} disabled={busyId === t.id} className="rounded-md border border-white/15 px-3 py-1 text-xs text-white/70 hover:bg-white/5 disabled:opacity-50">
                           {busyId === t.id ? '…' : 'Cancel'}
                         </button>
                       </div>
                     ) : null}
+                    <div className="mt-2 text-[10px] text-white/25">Click for trip summary</div>
                   </div>
                 ))}
               </div>
@@ -395,6 +409,111 @@ export function Trips() {
           </div>
         </form>
       </Modal>
+
+      <Modal open={!!summaryTrip} onClose={() => setSummaryTrip(null)} title="Trip summary">
+        {summaryTrip ? <TripSummary trip={summaryTrip} /> : null}
+      </Modal>
+    </div>
+  )
+}
+
+function TripSummary({ trip }: { trip: Trip }) {
+  const isCompleted = trip.status === 'COMPLETED'
+  const efficiency =
+    trip.fuelConsumed && trip.fuelConsumed > 0
+      ? (trip.plannedDistance / trip.fuelConsumed).toFixed(2)
+      : null
+
+  const currency = (n?: number | null) =>
+    typeof n === 'number' ? `₹${n.toLocaleString('en-IN')}` : '—'
+
+  return (
+    <div className="space-y-4">
+      {/* Header: route + status */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">
+            {trip.source} → {trip.destination}
+          </div>
+          <div className="mt-0.5 font-mono text-[11px] text-white/35">
+            #{trip.id.slice(0, 8)}
+          </div>
+        </div>
+        <StatusBadge tone={TRIP_TONE[trip.status]} label={trip.status} />
+      </div>
+
+      {/* Lifecycle position */}
+      <div className="flex items-center gap-1.5">
+        {LIFECYCLE.filter((s) => !(trip.status === 'CANCELLED' && (s.label === 'Dispatched' || s.label === 'Completed')))
+          .map((s) => s.label.toUpperCase())
+          .map((label, i, arr) => {
+            const active = label === trip.status
+            return (
+              <span key={label} className="flex items-center gap-1.5">
+                <span
+                  className={`rounded-md px-2 py-0.5 text-[10px] font-medium ${
+                    active ? 'bg-white/15 text-white' : 'bg-white/5 text-white/35'
+                  }`}
+                >
+                  {label}
+                </span>
+                {i < arr.length - 1 ? <span className="text-white/20">→</span> : null}
+              </span>
+            )
+          })}
+      </div>
+
+      {/* Assignment */}
+      <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+        <KeyValue
+          label="Vehicle"
+          value={
+            trip.vehicle ? `${trip.vehicle.name} · ${trip.vehicle.regNo}` : 'Unassigned'
+          }
+        />
+        <KeyValue
+          label="Driver"
+          value={
+            trip.driver ? `${trip.driver.name} · ${trip.driver.licenseNo}` : 'Unassigned'
+          }
+        />
+        <KeyValue label="Cargo weight" value={`${trip.cargoWeight.toLocaleString()} kg`} />
+        <KeyValue label="Planned distance" value={`${trip.plannedDistance} km`} />
+        <KeyValue
+          label="Created"
+          value={new Date(trip.createdAt).toLocaleString('en-US', {
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          })}
+        />
+      </div>
+
+      {/* Completion details */}
+      {isCompleted ? (
+        <div className="rounded-lg border border-[#28c840]/25 bg-[#28c840]/[0.05] p-3">
+          <div className="mb-1.5 text-[10px] uppercase tracking-widest text-[#4ade80]">
+            Completion record
+          </div>
+          <KeyValue
+            label="Final odometer"
+            value={trip.finalOdometer != null ? `${trip.finalOdometer.toLocaleString()} km` : '—'}
+          />
+          <KeyValue
+            label="Fuel consumed"
+            value={trip.fuelConsumed != null ? `${trip.fuelConsumed.toLocaleString()} L` : '—'}
+          />
+          <KeyValue label="Fuel efficiency" value={efficiency ? `${efficiency} km/l` : '—'} />
+          <KeyValue label="Revenue" value={currency(trip.revenue)} />
+        </div>
+      ) : (
+        <p className="text-xs text-white/40">
+          {trip.status === 'DRAFT'
+            ? 'This trip is a draft — dispatch it to set the vehicle and driver to ON_TRIP.'
+            : trip.status === 'DISPATCHED'
+              ? 'In progress. Completion will record final odometer, fuel, and revenue.'
+              : 'Trip cancelled — vehicle and driver were restored to AVAILABLE.'}
+        </p>
+      )}
     </div>
   )
 }

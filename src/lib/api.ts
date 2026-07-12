@@ -95,6 +95,9 @@ export interface Trip {
   plannedDistance: number
   status: TripStatus
   createdAt: string
+  finalOdometer?: number | null
+  fuelConsumed?: number | null
+  revenue?: number | null
   vehicle?: { id: string; regNo: string; name: string; status: string }
   driver?: { id: string; name: string; licenseNo: string; status: string }
 }
