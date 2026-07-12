@@ -8,18 +8,19 @@ set -a
 . ./.env
 set +a
 
-echo "===== migrate ====="
-# transitops role needs CREATEDB for prisma migrate dev's shadow database
-sudo -u postgres psql -c "ALTER ROLE transitops CREATEDB;" 2>/dev/null || true
-if [ -d prisma/migrations ] && [ -n "$(ls -A prisma/migrations 2>/dev/null)" ]; then
-  npx prisma migrate deploy 2>&1 | tail -10
-else
-  npx prisma migrate dev --name init --skip-seed 2>&1 | tail -15 \
-    || { echo "migrate dev failed -> db push"; npx prisma db push --accept-data-loss 2>&1 | tail -10; }
+echo "===== migrate (deploy + baseline) ====="
+MIGRATION=20260712000000_init
+HAS_USERS=$(sudo -u postgres psql -d transitops -tAc "SELECT to_regclass('public.users') IS NOT NULL" | tr -d '[:space:]')
+HAS_MIG=$(sudo -u postgres psql -d transitops -tAc "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" | tr -d '[:space:]')
+if [ "$HAS_USERS" = "t" ] && [ "$HAS_MIG" != "t" ]; then
+  # DB was created via `prisma db push` (schema present, no migration history) -> baseline it
+  echo "baselining existing schema as $MIGRATION"
+  npx prisma migrate resolve --applied "$MIGRATION"
 fi
+npx prisma migrate deploy
 
 echo "===== seed ====="
-npm run seed 2>&1 | tail -12
+npm run seed
 
 echo "===== pm2 ====="
 MAIN=dist/main.js

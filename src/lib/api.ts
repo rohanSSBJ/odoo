@@ -104,6 +104,59 @@ export interface Paginated<T> {
   meta: { total: number; page: number; limit: number; totalPages: number }
 }
 
+export interface MaintenanceLog {
+  id: string
+  vehicleId: string
+  type: string
+  cost: number
+  notes?: string | null
+  isOpen: boolean
+  openedAt: string
+  closedAt?: string | null
+  vehicle?: { id: string; regNo: string; name: string; status: string }
+}
+
+export interface FuelLog {
+  id: string
+  vehicleId: string
+  tripId?: string | null
+  liters: number
+  cost: number
+  date: string
+  vehicle?: { id: string; regNo: string; name: string }
+}
+
+export interface Expense {
+  id: string
+  vehicleId: string
+  category: string
+  amount: number
+  date: string
+  vehicle?: { id: string; regNo: string; name: string }
+}
+
+export interface CostRollup {
+  vehicleId: string | null
+  fuelCost: number
+  expenseCost: number
+  maintenanceCost: number
+  operationalCost: number
+  totalCost: number
+}
+
+export interface VehicleReportRow {
+  regNo: string
+  name: string
+  type: string
+  status: string
+  odometer: number
+  acquisitionCost: number
+  fuelCost: number
+  maintenanceCost: number
+  revenue: number
+  roi: number
+}
+
 export interface Kpis {
   fleetUtilizationPct: number
   fuelEfficiency: number
@@ -139,11 +192,53 @@ export const AuthApi = {
 export const VehiclesApi = {
   list: (params: Record<string, unknown> = {}) =>
     api.get<Paginated<Vehicle>>('/vehicles', { params }).then((r) => r.data),
+  create: (body: Partial<Vehicle>) =>
+    api.post<Vehicle>('/vehicles', body).then((r) => r.data),
+  update: (id: string, body: Partial<Vehicle>) =>
+    api.patch<Vehicle>(`/vehicles/${id}`, body).then((r) => r.data),
+  remove: (id: string) => api.delete(`/vehicles/${id}`).then((r) => r.data),
 }
 
 export const DriversApi = {
   list: (params: Record<string, unknown> = {}) =>
     api.get<Paginated<Driver>>('/drivers', { params }).then((r) => r.data),
+  create: (body: Partial<Driver>) =>
+    api.post<Driver>('/drivers', body).then((r) => r.data),
+  update: (id: string, body: Partial<Driver>) =>
+    api.patch<Driver>(`/drivers/${id}`, body).then((r) => r.data),
+  remove: (id: string) => api.delete(`/drivers/${id}`).then((r) => r.data),
+}
+
+export const MaintenanceApi = {
+  list: (params: Record<string, unknown> = {}) =>
+    api.get<Paginated<MaintenanceLog>>('/maintenance', { params }).then((r) => r.data),
+  open: (body: { vehicleId: string; type: string; cost?: number; notes?: string }) =>
+    api.post<MaintenanceLog>('/maintenance', body).then((r) => r.data),
+  close: (id: string, body: { cost?: number; notes?: string } = {}) =>
+    api.post<MaintenanceLog>(`/maintenance/${id}/close`, body).then((r) => r.data),
+}
+
+export const FuelExpensesApi = {
+  listFuel: (params: Record<string, unknown> = {}) =>
+    api.get<Paginated<FuelLog>>('/fuel-logs', { params }).then((r) => r.data),
+  createFuel: (body: { vehicleId: string; liters: number; cost: number; tripId?: string }) =>
+    api.post<FuelLog>('/fuel-logs', body).then((r) => r.data),
+  listExpenses: (params: Record<string, unknown> = {}) =>
+    api.get<Paginated<Expense>>('/expenses', { params }).then((r) => r.data),
+  createExpense: (body: { vehicleId: string; category: string; amount: number }) =>
+    api.post<Expense>('/expenses', body).then((r) => r.data),
+  rollup: (vehicleId?: string) =>
+    api
+      .get<CostRollup>('/expenses/rollup', { params: vehicleId ? { vehicleId } : {} })
+      .then((r) => r.data),
+}
+
+export const AnalyticsApi = {
+  kpis: () => api.get<Kpis>('/analytics/kpis').then((r) => r.data),
+  report: () =>
+    api.get<VehicleReportRow[]>('/analytics/reports', { params: { format: 'json' } }).then((r) => r.data),
+  downloadCsv: () =>
+    api.get('/analytics/reports', { params: { format: 'csv' }, responseType: 'blob' }).then((r) => r.data as Blob),
 }
 
 export const TripsApi = {
@@ -162,8 +257,4 @@ export const TripsApi = {
   complete: (id: string, body: { finalOdometer: number; fuelConsumed: number; revenue?: number }) =>
     api.post<Trip>(`/trips/${id}/complete`, body).then((r) => r.data),
   cancel: (id: string) => api.post<Trip>(`/trips/${id}/cancel`).then((r) => r.data),
-}
-
-export const AnalyticsApi = {
-  kpis: () => api.get<Kpis>('/analytics/kpis').then((r) => r.data),
 }

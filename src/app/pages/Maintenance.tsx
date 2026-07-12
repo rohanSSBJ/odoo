@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Wrench, Plus } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Wrench } from 'lucide-react'
 import {
   Card,
   PageHeader,
@@ -7,47 +7,110 @@ import {
   RuleNote,
   SectionCard,
   StateFlow,
-  ActionButton,
+  FormRow,
+  fieldInputCls,
 } from '../ui'
-import type { StatusTone } from '../ui'
+import { useAuth } from '../../lib/auth'
+import {
+  MaintenanceApi,
+  VehiclesApi,
+  apiError,
+  type MaintenanceLog,
+  type Vehicle,
+} from '../../lib/api'
 
-const LOGS: {
-  vehicle: string
-  type: string
-  cost: string
-  openedAt: string
-  closedAt: string
-  isOpen: boolean
-  tone: StatusTone
-  status: string
-}[] = [
-  { vehicle: 'VAN-05', type: 'Oil Change', cost: '2,600', openedAt: '06 Jul', closedAt: '—', isOpen: true, tone: 'inshop', status: 'In Shop' },
-  { vehicle: 'MINI-03', type: 'Tyre Replace', cost: '6,200', openedAt: '05 Jul', closedAt: '—', isOpen: true, tone: 'inshop', status: 'In Shop' },
-  { vehicle: 'TRUCK-11', type: 'Engine Repair', cost: '18,000', openedAt: '28 Jun', closedAt: '02 Jul', isOpen: false, tone: 'completed', status: 'Closed' },
-  { vehicle: 'VAN-09', type: 'Brake Service', cost: '4,100', openedAt: '20 Jun', closedAt: '21 Jun', isOpen: false, tone: 'completed', status: 'Closed' },
-]
+const SERVICE_TYPES = ['Oil Change', 'Engine Repair', 'Tyre Replace', 'Brake Service', 'Inspection']
 
-const inputCls =
-  'w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-white/20 focus:outline-none'
+function fmtDate(s?: string | null) {
+  return s ? new Date(s).toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) : '—'
+}
 
 export function Maintenance() {
+  const { user } = useAuth()
+  const canWrite = user?.role === 'FLEET_MANAGER'
+
   const [tab, setTab] = useState<'open' | 'closed'>('open')
-  const rows = LOGS.filter((l) => (tab === 'open' ? l.isOpen : !l.isOpen))
-  const openCount = LOGS.filter((l) => l.isOpen).length
+  const [logs, setLogs] = useState<MaintenanceLog[]>([])
+  const [openCount, setOpenCount] = useState(0)
+  const [closedCount, setClosedCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+
+  const [vehicleId, setVehicleId] = useState('')
+  const [type, setType] = useState(SERVICE_TYPES[0])
+  const [cost, setCost] = useState(2600)
+  const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [closingId, setClosingId] = useState<string | null>(null)
+
+  const loadLogs = () => {
+    setLoading(true)
+    setError(null)
+    MaintenanceApi.list({ isOpen: tab === 'open', limit: 50 })
+      .then((r) => setLogs(r.data))
+      .catch((e) => setError(apiError(e)))
+      .finally(() => setLoading(false))
+  }
+  const loadCounts = () => {
+    MaintenanceApi.list({ isOpen: true, limit: 1 }).then((r) => setOpenCount(r.meta.total)).catch(() => {})
+    MaintenanceApi.list({ isOpen: false, limit: 1 }).then((r) => setClosedCount(r.meta.total)).catch(() => {})
+  }
+  const loadVehicles = () => {
+    VehiclesApi.list({ limit: 100 }).then((r) => setVehicles(r.data.filter((v) => v.status !== 'RETIRED'))).catch(() => {})
+  }
+
+  useEffect(loadLogs, [tab])
+  useEffect(() => {
+    loadCounts()
+    loadVehicles()
+  }, [])
+
+  const mtdCost = logs.reduce((s, l) => s + l.cost, 0)
+
+  const openRecord = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setFormError(null)
+    setNotice(null)
+    try {
+      await MaintenanceApi.open({ vehicleId, type, cost: Number(cost), notes: notes || undefined })
+      setNotice('Record opened — vehicle set to IN_SHOP.')
+      setVehicleId('')
+      setNotes('')
+      setTab('open')
+      loadLogs()
+      loadCounts()
+      loadVehicles()
+    } catch (err) {
+      setFormError(apiError(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+  const closeRecord = async (id: string) => {
+    setClosingId(id)
+    try {
+      await MaintenanceApi.close(id)
+      loadLogs()
+      loadCounts()
+      loadVehicles()
+    } catch (err) {
+      setError(apiError(err))
+    } finally {
+      setClosingId(null)
+    }
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Maintenance"
         subtitle="Opening a record flips the vehicle to IN_SHOP and pulls it from the dispatch pool — automatically."
-        action={
-          <ActionButton>
-            <Plus className="w-4 h-4" /> Open service record
-          </ActionButton>
-        }
       />
 
-      {/* Summary */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card className="p-4">
           <Wrench className="h-4 w-4 text-[#fbbf24]" />
@@ -55,14 +118,14 @@ export function Maintenance() {
           <div className="mt-0.5 text-xs text-white/45">Open (IN_SHOP)</div>
         </Card>
         <Card className="p-4">
-          <div className="text-[10px] uppercase tracking-widest text-white/40">MTD service cost</div>
-          <div className="mt-2 text-2xl font-semibold">₹30,900</div>
+          <div className="text-[10px] uppercase tracking-widest text-white/40">{tab === 'open' ? 'Open' : 'Closed'} service cost</div>
+          <div className="mt-2 text-2xl font-semibold">₹{mtdCost.toLocaleString('en-IN')}</div>
           <div className="mt-0.5 text-xs text-white/45">feeds operational cost</div>
         </Card>
         <Card className="p-4">
-          <div className="text-[10px] uppercase tracking-widest text-white/40">Avg. turnaround</div>
-          <div className="mt-2 text-2xl font-semibold">2.4d</div>
-          <div className="mt-0.5 text-xs text-white/45">opened → closed</div>
+          <div className="text-[10px] uppercase tracking-widest text-white/40">Closed records</div>
+          <div className="mt-2 text-2xl font-semibold">{closedCount}</div>
+          <div className="mt-0.5 text-xs text-white/45">completed services</div>
         </Card>
         <Card className="p-4">
           <div className="text-[10px] uppercase tracking-widest text-white/40">Pool impact</div>
@@ -72,50 +135,48 @@ export function Maintenance() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-5">
-        {/* Log service record */}
-        <Card className="p-5 lg:col-span-2">
-          <div className="text-sm font-semibold">Log service record</div>
-          <div className="mt-4 space-y-4">
-            <Field label="Vehicle">
-              <select className={inputCls}>
-                <option className="bg-[#0c0c0c]">VAN-05 (Available)</option>
-                <option className="bg-[#0c0c0c]">TRUCK-11 (On Trip — closes on completion)</option>
-              </select>
-            </Field>
-            <Field label="Service Type">
-              <select className={inputCls}>
-                <option className="bg-[#0c0c0c]">Oil Change</option>
-                <option className="bg-[#0c0c0c]">Engine Repair</option>
-                <option className="bg-[#0c0c0c]">Tyre Replace</option>
-                <option className="bg-[#0c0c0c]">Brake Service</option>
-                <option className="bg-[#0c0c0c]">Inspection</option>
-              </select>
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Cost (₹)">
-                <input defaultValue={2600} type="number" className={inputCls} />
-              </Field>
-              <Field label="Opened at">
-                <input defaultValue="2026-07-06" type="date" className={inputCls} />
-              </Field>
-            </div>
-            <button className="w-full rounded-lg bg-[#e0972a] py-2.5 text-sm font-semibold text-black transition-colors hover:bg-[#f0a838]">
-              Open record → set vehicle IN_SHOP
-            </button>
-            <RuleNote>
-              Side effect runs in MaintenanceService.open(): vehicle.status → IN_SHOP. Closing restores it to AVAILABLE (unless RETIRED).
-            </RuleNote>
-          </div>
-        </Card>
+        {canWrite ? (
+          <Card className="p-5 lg:col-span-2">
+            <div className="text-sm font-semibold">Log service record</div>
+            <form className="mt-4 space-y-4" onSubmit={openRecord}>
+              <FormRow label="Vehicle">
+                <select required value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} className={fieldInputCls}>
+                  <option value="" className="bg-[#0c0c0c]">Select vehicle…</option>
+                  {vehicles.map((v) => (
+                    <option key={v.id} value={v.id} className="bg-[#0c0c0c]">
+                      {v.name} · {v.regNo} ({v.status})
+                    </option>
+                  ))}
+                </select>
+              </FormRow>
+              <FormRow label="Service Type">
+                <select value={type} onChange={(e) => setType(e.target.value)} className={fieldInputCls}>
+                  {SERVICE_TYPES.map((t) => <option key={t} className="bg-[#0c0c0c]">{t}</option>)}
+                </select>
+              </FormRow>
+              <FormRow label="Cost (₹)">
+                <input type="number" min={0} value={cost} onChange={(e) => setCost(Number(e.target.value))} className={fieldInputCls} />
+              </FormRow>
+              <FormRow label="Notes (optional)">
+                <input value={notes} onChange={(e) => setNotes(e.target.value)} className={fieldInputCls} />
+              </FormRow>
+              {formError ? <div className="rounded-lg border border-[#ff5f57]/40 bg-[#ff5f57]/10 px-3 py-2 text-xs text-[#ff8a84]">{formError}</div> : null}
+              {notice ? <div className="rounded-lg border border-[#28c840]/40 bg-[#28c840]/10 px-3 py-2 text-xs text-[#4ade80]">{notice}</div> : null}
+              <button type="submit" disabled={submitting || !vehicleId} className="w-full rounded-lg bg-[#e0972a] py-2.5 text-sm font-semibold text-black transition-colors hover:bg-[#f0a838] disabled:opacity-60">
+                {submitting ? 'Opening…' : 'Open record → set vehicle IN_SHOP'}
+              </button>
+              <RuleNote>MaintenanceService.open(): vehicle.status → IN_SHOP. Closing restores it to AVAILABLE (unless RETIRED).</RuleNote>
+            </form>
+          </Card>
+        ) : null}
 
-        {/* Service log with tabs */}
-        <Card className="p-0 overflow-hidden lg:col-span-3">
+        <Card className={`p-0 overflow-hidden ${canWrite ? 'lg:col-span-3' : 'lg:col-span-5'}`}>
           <div className="flex items-center gap-1 border-b border-white/10 p-3">
-            <Tab active={tab === 'open'} onClick={() => setTab('open')} label={`Open (${LOGS.filter((l) => l.isOpen).length})`} />
-            <Tab active={tab === 'closed'} onClick={() => setTab('closed')} label={`Closed (${LOGS.filter((l) => !l.isOpen).length})`} />
+            <Tab active={tab === 'open'} onClick={() => setTab('open')} label={`Open (${openCount})`} />
+            <Tab active={tab === 'closed'} onClick={() => setTab('closed')} label={`Closed (${closedCount})`} />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-widest text-white/35">
                   <th className="px-5 py-3 font-medium">Vehicle</th>
@@ -127,23 +188,33 @@ export function Maintenance() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {rows.map((s, i) => (
-                  <tr key={i} className="text-white/80 transition-colors hover:bg-white/[0.02]">
-                    <td className="px-5 py-3.5 font-medium">{s.vehicle}</td>
-                    <td className="px-5 py-3.5 text-white/60">{s.type}</td>
-                    <td className="px-5 py-3.5 text-white/60">₹{s.cost}</td>
-                    <td className="px-5 py-3.5 text-white/60">{s.openedAt}</td>
-                    <td className="px-5 py-3.5 text-white/60">{s.closedAt}</td>
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <StatusBadge tone={s.tone} label={s.status} />
-                        {s.isOpen ? (
-                          <button className="text-xs text-[#7db3ff] hover:text-white">Close →</button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {loading ? (
+                  <tr><td colSpan={6} className="px-5 py-10 text-center text-white/40 animate-pulse">Loading…</td></tr>
+                ) : error ? (
+                  <tr><td colSpan={6} className="px-5 py-10 text-center text-[#ff8a84]">{error}</td></tr>
+                ) : logs.length === 0 ? (
+                  <tr><td colSpan={6} className="px-5 py-10 text-center text-white/40">No {tab} records.</td></tr>
+                ) : (
+                  logs.map((s) => (
+                    <tr key={s.id} className="text-white/80 transition-colors hover:bg-white/[0.02]">
+                      <td className="px-5 py-3.5 font-medium">{s.vehicle?.regNo ?? s.vehicleId.slice(0, 8)}</td>
+                      <td className="px-5 py-3.5 text-white/60">{s.type}</td>
+                      <td className="px-5 py-3.5 text-white/60">₹{s.cost.toLocaleString('en-IN')}</td>
+                      <td className="px-5 py-3.5 text-white/60">{fmtDate(s.openedAt)}</td>
+                      <td className="px-5 py-3.5 text-white/60">{fmtDate(s.closedAt)}</td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <StatusBadge tone={s.isOpen ? 'inshop' : 'completed'} label={s.isOpen ? 'In Shop' : 'Closed'} />
+                          {s.isOpen && canWrite ? (
+                            <button onClick={() => closeRecord(s.id)} disabled={closingId === s.id} className="text-xs text-[#7db3ff] hover:text-white disabled:opacity-50">
+                              {closingId === s.id ? 'Closing…' : 'Close →'}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -167,22 +238,9 @@ function Tab({ active, onClick, label }: { active: boolean; onClick: () => void;
   return (
     <button
       onClick={onClick}
-      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-        active ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/5'
-      }`}
+      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${active ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/5'}`}
     >
       {label}
     </button>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">
-        {label}
-      </span>
-      {children}
-    </label>
   )
 }

@@ -5,14 +5,13 @@ import { LogoMark } from '../../components/primitives'
 import { useAuth } from '../../lib/auth'
 import { apiError, type Role } from '../../lib/api'
 
-// Canonical roles + their seeded demo accounts (all password: Passw0rd!)
-const DEMO: { role: Role; label: string; email: string }[] = [
-  { role: 'FLEET_MANAGER', label: 'Fleet Manager', email: 'manager@transitops.io' },
-  { role: 'DRIVER', label: 'Driver', email: 'driver@transitops.io' },
-  { role: 'SAFETY_OFFICER', label: 'Safety Officer', email: 'safety@transitops.io' },
-  { role: 'FINANCIAL_ANALYST', label: 'Financial Analyst', email: 'finance@transitops.io' },
+// Canonical roles + their seeded demo accounts (simple role-mapped credentials)
+const DEMO: { role: Role; label: string; email: string; password: string }[] = [
+  { role: 'FLEET_MANAGER', label: 'Fleet Manager', email: 'manager@transitops.io', password: 'manager123' },
+  { role: 'DRIVER', label: 'Driver', email: 'driver@transitops.io', password: 'driver123' },
+  { role: 'SAFETY_OFFICER', label: 'Safety Officer', email: 'safety@transitops.io', password: 'safety123' },
+  { role: 'FINANCIAL_ANALYST', label: 'Financial Analyst', email: 'finance@transitops.io', password: 'finance123' },
 ]
-const DEMO_PASSWORD = 'Passw0rd!'
 
 export function Login() {
   const navigate = useNavigate()
@@ -20,14 +19,17 @@ export function Login() {
 
   const [selected, setSelected] = useState<Role>('FLEET_MANAGER')
   const [email, setEmail] = useState(DEMO[0].email)
-  const [password, setPassword] = useState(DEMO_PASSWORD)
+  const [password, setPassword] = useState(DEMO[0].password)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   const onRoleChange = (role: Role) => {
     setSelected(role)
     const found = DEMO.find((d) => d.role === role)
-    if (found) setEmail(found.email)
+    if (found) {
+      setEmail(found.email)
+      setPassword(found.password)
+    }
   }
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -149,7 +151,8 @@ export function Login() {
               <li>Financial Analyst → Fuel &amp; Expenses, Analytics</li>
             </ul>
             <div className="mt-3 text-[11px] text-white/35">
-              Demo password: <span className="font-mono text-white/60">{DEMO_PASSWORD}</span>
+              Selected demo login: <span className="font-mono text-white/60">{email}</span> ·{' '}
+              <span className="font-mono text-white/60">{password}</span>
             </div>
           </div>
         </motion.div>
