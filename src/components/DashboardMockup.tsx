@@ -103,7 +103,7 @@ export function DashboardMockup() {
             <span className="w-3 h-3 rounded-full" style={{ background: '#28c840' }} />
           </div>
           <span className="absolute left-1/2 -translate-x-1/2 text-xs text-white/50">
-            TransitOps — Dispatch
+            TransitOps — Trip Dispatcher
           </span>
         </div>
 
