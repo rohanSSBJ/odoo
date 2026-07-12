@@ -3,13 +3,12 @@ import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-const DEMO_PASSWORD = 'Passw0rd!';
-
+// Simple, role-mapped demo credentials (email + password per role).
 const demoUsers = [
-  { email: 'manager@transitops.io', name: 'Fiona Fleet', role: Role.FLEET_MANAGER },
-  { email: 'driver@transitops.io', name: 'Dave Driver', role: Role.DRIVER },
-  { email: 'safety@transitops.io', name: 'Sam Safety', role: Role.SAFETY_OFFICER },
-  { email: 'finance@transitops.io', name: 'Fay Finance', role: Role.FINANCIAL_ANALYST },
+  { email: 'manager@transitops.io', name: 'Fiona Fleet', role: Role.FLEET_MANAGER, password: 'manager123' },
+  { email: 'driver@transitops.io', name: 'Dave Driver', role: Role.DRIVER, password: 'driver123' },
+  { email: 'safety@transitops.io', name: 'Sam Safety', role: Role.SAFETY_OFFICER, password: 'safety123' },
+  { email: 'finance@transitops.io', name: 'Fay Finance', role: Role.FINANCIAL_ANALYST, password: 'finance123' },
 ];
 
 function daysFromNow(days: number): Date {
@@ -21,16 +20,16 @@ function daysFromNow(days: number): Date {
 async function main() {
   console.log('Seeding database...');
 
-  const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
-
   for (const u of demoUsers) {
+    const passwordHash = await bcrypt.hash(u.password, 10);
     await prisma.user.upsert({
       where: { email: u.email },
-      update: {},
-      create: { ...u, passwordHash },
+      // refresh name/role/password on re-seed so credentials are deterministic
+      update: { name: u.name, role: u.role, passwordHash },
+      create: { email: u.email, name: u.name, role: u.role, passwordHash },
     });
   }
-  console.log(`Seeded ${demoUsers.length} demo users (password: ${DEMO_PASSWORD})`);
+  console.log(`Seeded ${demoUsers.length} demo users (role-mapped passwords)`);
 
   // Vehicles
   const vehicleData = [
